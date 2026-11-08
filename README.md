@@ -112,6 +112,14 @@ entities:
 - **Today**: until the counter restarts, today counts as 0 minutes, not as yesterday's total.
 - **Collar controls**: Tractive makes them unavailable while the collar saves power (usually at home or charging).
 
+## More cards
+
+Other cards in the same style:
+
+- [Bin Day Card](https://github.com/AldebaranPrimo/bin-day-card): which bins to put out tonight and the next collection days.
+- [Battery Check Card](https://github.com/AldebaranPrimo/battery-check-card): finds every battery in your home and shows which ones to replace now.
+- [Appliance Energy Card](https://github.com/AldebaranPrimo/appliance-energy-card): what is running on your smart plugs, with power and energy per day.
+
 ## Licence
 
 [MIT](LICENSE)
