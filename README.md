@@ -13,7 +13,7 @@ needs a walk today.
 - The collar controls (buzzer, light, live tracking): tap to switch them on or off. When they are unavailable because
   the collar is in power saving mode, the card says so.
 - The last 14 days of activity (full bars on the days the goal was reached), and the last 7 days of presence at home
-  and of collar battery.
+  (hover a segment for its start and end, with the total time at home) and of collar battery.
 - Several pets: one section each, or pick one with `pet:`.
 - No animations, works at phone width, follows your light or dark theme. English and Italian.
 
@@ -72,6 +72,8 @@ color: "#e07a3a"
 | `goal` | none | Daily goal in minutes, used only when Tractive gives none. |
 | `show_controls` | `true` | Collar controls. |
 | `show_history` | `true` | Last 7 days of presence and battery. |
+| `show_home_total` | `true` | A line under the presence bar with the total time at home in the last 7 days. |
+| `battery_scale` | `fixed` | Battery chart scale: `fixed` is 0 to 100 %, `auto` fits the data. The top and bottom values are printed on the chart. |
 | `language` | Home Assistant language | `en` or `it`; other languages fall back to English. |
 | `entities` | found automatically | Map to set or replace entities, see below. |
 | `name` | | Pet name when you set the entities by hand. |
@@ -96,6 +98,8 @@ entities:
   powerSaving: binary_sensor.biscuit_tracker_power_saving
   tracker: device_tracker.biscuit_tracker
   person: person.biscuit                       # optional: presence from a person instead of the tracker
+  arrival: input_datetime.biscuit_last_arrival     # optional: when set and valid, used for "at home since"
+  departure: input_datetime.biscuit_last_departure # optional: when set and valid, used for "away for"
   buzzer: switch.biscuit_tracker_buzzer
   led: switch.biscuit_tracker_led
   live: switch.biscuit_live_tracking

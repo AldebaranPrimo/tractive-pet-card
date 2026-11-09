@@ -5,7 +5,7 @@
  * Entities are found automatically (platform "tractive"); nothing to configure for a single pet.
  * https://github.com/AldebaranPrimo/tractive-pet-card — MIT licence.
  */
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 const STRINGS = {
   en: {
@@ -35,7 +35,7 @@ const STRINGS = {
     buzzer: "Buzzer", led: "Light", live: "Live tracking",
     days14: (g) => `Activity, last 14 days (full bars = goal of ${g} min reached)`,
     days14NoGoal: "Activity, last 14 days",
-    last7: "Last 7 days", presence: "At home", batteryLine: "Collar battery",
+    last7: "Last 7 days", presence: "At home", batteryLine: "Collar battery", homeTotal: (d) => `at home ${d}`, tipHome: (a, b) => `At home: ${a} – ${b}`,
     noData: "No data in this period", since: (d) => `history available since ${d}`,
     trackerStates: { operational: "working", not_reporting: "not reporting", inaccurate_position: "inaccurate position",
       system_shutdown_user: "switched off", system_startup: "starting up" },
@@ -68,7 +68,7 @@ const STRINGS = {
     buzzer: "Suoneria", led: "Luce", live: "Posizione in diretta",
     days14: (g) => `Attività, ultimi 14 giorni (barre piene = obiettivo di ${g} min raggiunto)`,
     days14NoGoal: "Attività, ultimi 14 giorni",
-    last7: "Ultimi 7 giorni", presence: "A casa", batteryLine: "Batteria del collare",
+    last7: "Ultimi 7 giorni", presence: "A casa", batteryLine: "Batteria del collare", homeTotal: (d) => `in casa ${d}`, tipHome: (a, b) => `A casa: ${a} – ${b}`,
     noData: "Nessun dato nel periodo", since: (d) => `storico disponibile dal ${d}`,
     trackerStates: { operational: "funziona", not_reporting: "non comunica", inaccurate_position: "posizione imprecisa",
       system_shutdown_user: "spento", system_startup: "in avvio" },
@@ -112,7 +112,8 @@ class TractivePetCard extends HTMLElement {
   setConfig(config) {
     if (config.entities && typeof config.entities !== "object") throw new Error("entities must be a map, e.g. { activity: sensor.x_activity_time }");
     if (config.color !== undefined && !/^#[0-9a-f]{6}$/i.test(config.color)) throw new Error("color must be like #8a6bd1");
-    this._config = { color: "#8a6bd1", days: 14, show_controls: true, show_history: true, ...config };
+    if (config.battery_scale !== undefined && !["fixed", "auto"].includes(config.battery_scale)) throw new Error("battery_scale must be fixed or auto");
+    this._config = { color: "#8a6bd1", days: 14, show_controls: true, show_history: true, show_home_total: true, battery_scale: "fixed", ...config };
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._sig = null;
     this._stats = {};
@@ -276,8 +277,16 @@ class TractivePetCard extends HTMLElement {
 
     const where = S(e.person) || S(e.tracker);
     const home = where?.state === "home";
-    const awayMs = usable(where) ? Date.now() - new Date(where.last_changed) : 0;
-    const whereText = !usable(where) ? "—" : home ? s.homeSince(time(new Date(where.last_changed))) : awayMs < 60000 ? s.awayNow : s.awayFor(span(awayMs));
+    // "since": the arrival / departure helpers (input_datetime) when set and valid, else when the state last changed
+    const helper = (id) => {
+      const x = S(id);
+      if (!usable(x) || x.attributes?.has_date === false) return null;
+      const raw = String(x.state).trim(), d = new Date(raw.length === 10 ? `${raw}T00:00:00` : raw.replace(" ", "T"));
+      return Number.isFinite(d.getTime()) && d.getTime() <= Date.now() + 60000 ? d : null;
+    };
+    const since = usable(where) ? (helper(home ? e.arrival : e.departure) || new Date(where.last_changed)) : null;
+    const awayMs = since ? Math.max(0, Date.now() - since) : 0;
+    const whereText = !usable(where) ? "—" : home ? s.homeSince(time(since)) : awayMs < 60000 ? s.awayNow : s.awayFor(span(awayMs));
     const bat = num(S(e.battery)), charging = S(e.charging)?.state === "on";
     const st = S(e.status), stText = usable(st) ? (s.trackerStates[st.state] || st.state) : "—";
 
@@ -348,18 +357,31 @@ class TractivePetCard extends HTMLElement {
       const pc = (t) => ((Math.min(Math.max(t, t0), t1) - t0) / (t1 - t0)) * 100;
       const pres = pts(e.person || e.tracker);
       const first = pres.length ? pres[0].t : null;
+      const when = (t) => new Date(t).toLocaleString(locale, { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+      let homeMs = 0;
       const segs = pres.map((x, i) => {
         const a = Math.max(x.t, t0), b = i + 1 < pres.length ? pres[i + 1].t : t1;
         if (b <= t0 || x.s !== "home") return "";
-        return `<i style="left:${pc(a).toFixed(2)}%;width:${Math.max(0.3, pc(b) - pc(a)).toFixed(2)}%"></i>`;
+        homeMs += Math.max(0, b - a);
+        return `<i style="left:${pc(a).toFixed(2)}%;width:${Math.max(0.3, pc(b) - pc(a)).toFixed(2)}%" title="${esc(s.tipHome(when(a), i + 1 < pres.length ? when(b) : time(new Date(t1))))}"></i>`;
       }).join("");
+      const homeMin = Math.round(homeMs / 60000);
       const batPts = pts(e.battery).map((x) => ({ t: x.t, v: parseFloat(x.s) })).filter((x) => Number.isFinite(x.v) && x.t >= t0);
       const midnight = []; const g = day0(new Date(t0)); g.setDate(g.getDate() + 1);
       for (let d = +g; d < t1; d += 86400000) midnight.push(d);
-      const axis = `<div class="axis">${midnight.map((d) => `<span style="left:${pc(d).toFixed(2)}%">${esc(new Date(d).toLocaleDateString(locale, { weekday: "short" }))}</span>`).join("")}</div>`;
-      const line = batPts.length > 1 ? `<svg viewBox="0 0 100 40" preserveAspectRatio="none"><path d="${batPts.map((x, i) => `${i ? "L" : "M"}${pc(x.t).toFixed(2)},${(38 - (x.v / 100) * 36).toFixed(2)}`).join("")}"/></svg>` : `<div class="foot">${esc(s.noData)}</div>`;
+      const axis = `<div class="axis">${midnight.map((d) => `<span style="left:${pc(d).toFixed(2)}%">${esc(`${new Date(d).toLocaleDateString(locale, { weekday: "short" })} ${new Date(d).getDate()}`)}</span>`).join("")}</div>`;
+      // battery scale: fixed 0-100, or fitted to the data (multiples of 5, at least 10 points tall)
+      let lo = 0, hi = 100;
+      if (c.battery_scale === "auto" && batPts.length) {
+        lo = Math.floor(Math.min(...batPts.map((x) => x.v)) / 5) * 5; hi = Math.ceil(Math.max(...batPts.map((x) => x.v)) / 5) * 5;
+        if (hi - lo < 10) { hi = Math.min(100, lo + 10); lo = Math.max(0, hi - 10); }
+        lo = Math.max(0, lo); hi = Math.min(100, hi);
+      }
+      const line = batPts.length > 1 ? `<svg viewBox="0 0 100 40" preserveAspectRatio="none"><path d="${batPts.map((x, i) => `${i ? "L" : "M"}${pc(x.t).toFixed(2)},${(38 - ((x.v - lo) / (hi - lo)) * 36).toFixed(2)}`).join("")}"/></svg>
+        <span class="max">${nf(hi)}%</span><span class="min">${nf(lo)}%</span>` : `<div class="foot">${esc(s.noData)}</div>`;
       week = `<div class="block"><div class="group">${esc(s.last7)}</div>
-        ${e.person || e.tracker ? `<div class="lane" data-info="${esc(e.person || e.tracker)}"><span class="lab">${esc(s.presence)}</span><div class="bar" style="--c:${c.color}">${segs}</div></div>` : ""}
+        ${e.person || e.tracker ? `<div class="lane" data-info="${esc(e.person || e.tracker)}"><span class="lab">${esc(s.presence)}</span><div class="bar" style="--c:${c.color}">${segs}</div></div>
+        ${c.show_home_total && pres.length ? `<div class="lane"><span class="lab"></span><div class="foot total">${esc(s.homeTotal(s.hours(Math.floor(homeMin / 60), homeMin % 60)))}</div></div>` : ""}` : ""}
         ${e.battery ? `<div class="lane" data-info="${esc(e.battery)}"><span class="lab">${esc(s.batteryLine)}</span><div class="line">${line}</div></div>` : ""}
         <div class="lane"><span class="lab"></span>${axis}</div>
         ${first && first > t0 + 12 * 3600000 ? `<div class="foot">${esc(s.since(new Date(first).toLocaleDateString(locale, { day: "numeric", month: "numeric" })))}</div>` : ""}</div>`;
@@ -441,7 +463,12 @@ const STYLE = `
   .lane .lab { font-size: .72rem; color: var(--secondary-text-color); }
   .bar { position: relative; height: 14px; border-radius: 4px; background: color-mix(in srgb, var(--secondary-text-color) 12%, transparent); overflow: hidden; }
   .bar i { position: absolute; top: 0; bottom: 0; background: var(--c); border-radius: 2px; }
+  .line { position: relative; border-top: 1px dotted var(--divider-color, rgba(127,127,127,.3)); border-bottom: 1px dotted var(--divider-color, rgba(127,127,127,.3)); }
   .line svg { width: 100%; height: 40px; display: block; }
+  .line .max, .line .min { position: absolute; left: 2px; font-size: .6rem; line-height: 1; color: var(--secondary-text-color); font-variant-numeric: tabular-nums;
+    background: color-mix(in srgb, var(--ha-card-background, var(--card-background-color, #fff)) 75%, transparent); padding: 1px 2px; border-radius: 3px; }
+  .line .max { top: 1px; } .line .min { bottom: 1px; }
+  .foot.total { margin-top: 0; }
   .line path { fill: none; stroke: #3aa55c; stroke-width: 1.8; vector-effect: non-scaling-stroke; }
   .axis { position: relative; height: 14px; font-size: .62rem; color: var(--secondary-text-color); }
   .axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
