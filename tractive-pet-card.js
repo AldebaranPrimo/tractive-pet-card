@@ -5,7 +5,7 @@
  * Entities are found automatically (platform "tractive"); nothing to configure for a single pet.
  * https://github.com/AldebaranPrimo/tractive-pet-card — MIT licence.
  */
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 
 const STRINGS = {
   en: {
@@ -33,8 +33,8 @@ const STRINGS = {
     controlsPowerSaving: "The controls are unavailable while the collar is in power saving mode (usually when the pet is at home or charging).",
     controlsHint: "Tap to switch on or off. Buzzer and light help to call the pet back when it is out of sight: use them sparingly, or they lose effect.",
     buzzer: "Buzzer", led: "Light", live: "Live tracking",
-    days14: (g) => `Activity, last 14 days (full bars = goal of ${g} min reached)`,
-    days14NoGoal: "Activity, last 14 days",
+    days14: (g, n) => `Activity, last ${n} days (full bars = goal of ${g} min reached)`,
+    days14NoGoal: (n) => `Activity, last ${n} days`,
     last7: "Last 7 days", presence: "At home", batteryLine: "Collar battery", homeTotal: (d) => `at home ${d}`, tipHome: (a, b) => `At home: ${a} – ${b}`,
     noData: "No data in this period", since: (d) => `history available since ${d}`,
     trackerStates: { operational: "working", not_reporting: "not reporting", inaccurate_position: "inaccurate position",
@@ -66,8 +66,8 @@ const STRINGS = {
     controlsPowerSaving: "I controlli non sono disponibili mentre il collare è in risparmio energetico (di solito quando l'animale è a casa o in carica).",
     controlsHint: "Tocca per accendere o spegnere. Suoneria e luce servono a richiamare l'animale quando è fuori vista: usale con parsimonia, o perdono efficacia.",
     buzzer: "Suoneria", led: "Luce", live: "Posizione in diretta",
-    days14: (g) => `Attività, ultimi 14 giorni (barre piene = obiettivo di ${g} min raggiunto)`,
-    days14NoGoal: "Attività, ultimi 14 giorni",
+    days14: (g, n) => `Attività, ultimi ${n} giorni (barre piene = obiettivo di ${g} min raggiunto)`,
+    days14NoGoal: (n) => `Attività, ultimi ${n} giorni`,
     last7: "Ultimi 7 giorni", presence: "A casa", batteryLine: "Batteria del collare", homeTotal: (d) => `in casa ${d}`, tipHome: (a, b) => `A casa: ${a} – ${b}`,
     noData: "Nessun dato nel periodo", since: (d) => `storico disponibile dal ${d}`,
     trackerStates: { operational: "funziona", not_reporting: "non comunica", inaccurate_position: "posizione imprecisa",
@@ -90,6 +90,12 @@ const SUFFIXES = {
 };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const checkLanguage = (v) => {
+  if (v === undefined || v === null || v === "") return;
+  let ok = typeof v === "string";
+  try { ok = ok && Intl.getCanonicalLocales(v).length > 0; } catch (e) { ok = false; }
+  if (!ok) throw new Error("language must be a language code like en or it-IT");
+};
 const day0 = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 function num(s) {
@@ -110,13 +116,17 @@ class TractivePetCard extends HTMLElement {
   static getStubConfig() { return {}; }
 
   setConfig(config) {
-    if (config.entities && typeof config.entities !== "object") throw new Error("entities must be a map, e.g. { activity: sensor.x_activity_time }");
+    if (config.entities && (typeof config.entities !== "object" || Array.isArray(config.entities))) throw new Error("entities must be a map, e.g. { activity: sensor.x_activity_time }");
     if (config.color !== undefined && !/^#[0-9a-f]{6}$/i.test(config.color)) throw new Error("color must be like #8a6bd1");
     if (config.battery_scale !== undefined && !["fixed", "auto"].includes(config.battery_scale)) throw new Error("battery_scale must be fixed or auto");
-    this._config = { color: "#8a6bd1", days: 14, show_controls: true, show_history: true, show_home_total: true, battery_scale: "fixed", ...config };
+    checkLanguage(config.language);
+    const merged = { color: "#8a6bd1", days: 14, show_controls: true, show_history: true, show_home_total: true, battery_scale: "fixed", ...config };
+    if (!Number.isInteger(merged.days) || merged.days < 1 || merged.days > 60) throw new Error("days must be a whole number from 1 to 60");
+    this._config = merged;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._sig = null;
     this._stats = {};
+    this._loadedAt = 0;
     if (this._hass) this._update(true);
   }
 
@@ -343,7 +353,7 @@ class TractivePetCard extends HTMLElement {
       const list = [...Array(c.days)].map((_, i) => { const d = day0(new Date()); d.setDate(d.getDate() - (c.days - 1) + i); return { d, v: daily[dayKey(d)] ?? null }; });
       if (minutes !== null) list[list.length - 1].v = minutes;
       const top = Math.max(goal || 0, ...list.map((x) => x.v ?? 0), 1);
-      days = `<div class="block"><div class="group">${esc(goal ? s.days14(nf(goal)) : s.days14NoGoal)}</div><div class="days" style="--c:${c.color};--n:${c.days}">${list.map((x) => {
+      days = `<div class="block"><div class="group">${esc(goal ? s.days14(nf(goal), c.days) : s.days14NoGoal(c.days))}</div><div class="days" style="--c:${c.color};--n:${c.days}">${list.map((x) => {
         const label = `${x.d.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "numeric" })}: ${x.v === null ? "—" : nf(x.v) + " " + s.min}`;
         return `<div title="${esc(label)}"><i class="${x.v === null ? "none" : x.v === 0 ? "zero" : goal && x.v >= goal ? "" : "part"}" style="height:${x.v ? Math.max(3, (x.v / top) * 44).toFixed(1) : 2}px"></i><span>${x.d.getDate()}</span></div>`;
       }).join("")}</div></div>`;

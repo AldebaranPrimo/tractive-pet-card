@@ -68,7 +68,7 @@ color: "#e07a3a"
 | `pet` | all pets | Name of the pet (as in the Tractive app) or its device id. |
 | `title` | the pet's name, or *Pets* | Card title. `""` hides it. |
 | `color` | `#8a6bd1` | Colour of the pet as `#rrggbb`: banner, bars, presence. Text on it turns black or white, whichever reads better. |
-| `days` | `14` | Days in the activity bars. |
+| `days` | `14` | Days in the activity bars, a whole number from 1 to 60. |
 | `goal` | none | Daily goal in minutes, used only when Tractive gives none. |
 | `show_controls` | `true` | Collar controls. |
 | `show_history` | `true` | Last 7 days of presence and battery. |
