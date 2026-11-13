@@ -115,6 +115,11 @@ entities:
   that differs from yesterday's last one, lower or higher.
 - **Today**: until the counter restarts, today counts as 0 minutes, not as yesterday's total.
 - **Collar controls**: Tractive makes them unavailable while the collar saves power (usually at home or charging).
+- **When activity is unavailable**: the banner says why and since when. *Collar in power saving mode* (the collar
+  syncs health data rarely while saving power, so today's activity is often missing for hours at home), *Tractive not
+  reachable* (the collar status is unavailable too: Home Assistant lost the connection to the Tractive cloud), or *No
+  activity data*. The last value from the history is shown with the time it was reached, in the banner, and in a grey tile when it
+  is not from today.
 
 ## More cards
 

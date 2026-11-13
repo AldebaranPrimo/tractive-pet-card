@@ -5,7 +5,7 @@
  * Entities are found automatically (platform "tractive"); nothing to configure for a single pet.
  * https://github.com/AldebaranPrimo/tractive-pet-card — MIT licence.
  */
-const VERSION = "1.1.1";
+const VERSION = "1.2.0";
 
 const STRINGS = {
   en: {
@@ -21,8 +21,14 @@ const STRINGS = {
     walkHint: "a good moment for a walk",
     noHealth: "No activity data",
     noHealthSub: "Tractive sends activity only with a subscription that includes health data. Location, battery and collar still work.",
-    activityOff: "Activity data not available right now",
-    activityOffSub: (v) => v ? `Last known today: ${v} minutes. It usually comes back with the next sync of the collar.` : "It usually comes back with the next sync of the collar.",
+    activityOff: (t) => t ? `No activity data since ${t}` : "No activity data right now",
+    activitySaving: (t) => t ? `Collar in power saving mode since ${t}` : "Collar in power saving mode",
+    activityCloud: (t) => t ? `Tractive not reachable since ${t}` : "Tractive not reachable",
+    activityOffSub: "Today's activity arrives with the next sync of the collar.",
+    activitySavingSub: "The collar syncs rarely while saving power (usually at home or charging): today's activity arrives with the next sync.",
+    activityCloudSub: "Home Assistant lost the connection to the Tractive cloud. Activity comes back when Tractive sends it again.",
+    lastKnown: (v, w) => `Last value: ${v} min, ${w}.`,
+    lastActivity: "Last activity", today: (t) => `today ${t}`, yesterday: (t) => `yesterday ${t}`,
     lowBattery: (b) => `Charge the collar: battery at ${b}%`,
     trackerIssue: (s) => `Collar: ${s}`,
     home: "at home", away: "away", homeSince: (t) => `at home since ${t}`, awayFor: (d) => `away for ${d}`, awayNow: "just went out",
@@ -54,8 +60,14 @@ const STRINGS = {
     walkHint: "buon momento per una passeggiata",
     noHealth: "Nessun dato di attività",
     noHealthSub: "Tractive manda l'attività solo con un abbonamento che comprende i dati di salute. Posizione, batteria e collare funzionano lo stesso.",
-    activityOff: "Dati di attività non disponibili adesso",
-    activityOffSub: (v) => v ? `Ultimo valore di oggi: ${v} minuti. Di solito tornano alla prossima sincronizzazione del collare.` : "Di solito tornano alla prossima sincronizzazione del collare.",
+    activityOff: (t) => t ? `Nessun dato di attività da ${t}` : "Nessun dato di attività adesso",
+    activitySaving: (t) => t ? `Collare in risparmio energetico da ${t}` : "Collare in risparmio energetico",
+    activityCloud: (t) => t ? `Tractive non raggiungibile da ${t}` : "Tractive non raggiungibile",
+    activityOffSub: "L'attività di oggi arriva alla prossima sincronizzazione del collare.",
+    activitySavingSub: "In risparmio energetico il collare si sincronizza di rado (di solito a casa o in carica): l'attività di oggi arriva alla prossima sincronizzazione.",
+    activityCloudSub: "Home Assistant ha perso il collegamento con il cloud Tractive. L'attività torna quando Tractive la manda di nuovo.",
+    lastKnown: (v, w) => `Ultimo valore: ${v} min, ${w}.`,
+    lastActivity: "Ultima attività", today: (t) => `oggi alle ${t}`, yesterday: (t) => `ieri alle ${t}`,
     lowBattery: (b) => `Ricarica il collare: batteria al ${b}%`,
     trackerIssue: (s) => `Collare: ${s}`,
     home: "a casa", away: "fuori", homeSince: (t) => `a casa dalle ${t}`, awayFor: (d) => `fuori da ${d}`, awayNow: "appena uscito",
@@ -210,7 +222,7 @@ class TractivePetCard extends HTMLElement {
     this._loadedFor = pets.map((p) => p.id).join();
     const c = this._config, start = day0(new Date()); start.setDate(start.getDate() - c.days);
     const act = pets.map((p) => p.e.activity).filter(Boolean);
-    const hist = pets.flatMap((p) => [p.e.person || p.e.tracker, p.e.battery, p.e.goal]).filter(Boolean);
+    const hist = pets.flatMap((p) => [p.e.person || p.e.tracker, p.e.battery, p.e.goal, p.e.activity]).filter(Boolean);
     try {
       const [st, hi] = await Promise.all([
         act.length ? this._hass.callWS({ type: "recorder/statistics_during_period", start_time: start.toISOString(), period: "hour", statistic_ids: act, types: ["state", "max"] }) : {},
@@ -282,6 +294,26 @@ class TractivePetCard extends HTMLElement {
     // goal: the sensor, else its last value in the history, else the `goal` option
     const lastGoal = [...(this._hist?.[e.goal] || [])].reverse().map((x) => parseFloat(x.s)).find((v) => Number.isFinite(v));
     const goal = num(goalS) ?? lastGoal ?? (Number.isFinite(c.goal) ? c.goal : null);
+    // last known activity value and when it arrived (history, 7 days): shown when the sensor is unavailable
+    const when = (d) => {
+      const dd = Math.round((day0(new Date()) - day0(d)) / 86400000);
+      return dd === 0 ? s.today(time(d)) : dd === 1 ? s.yesterday(time(d)) : `${d.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "numeric" })} ${time(d)}`;
+    };
+    // the time is when the value was reached: the first entry of the final run of equal numeric values, skipping
+    // unavailable/unknown in between (a reconnection after midnight repeats yesterday's total with today's time)
+    const actRows = [...(this._hist?.[e.activity] || [])].map((x) => ({ v: parseFloat(x.s), t: new Date((x.lc ?? x.lu) * 1000) }))
+      .filter((x) => Number.isFinite(x.t.getTime())).sort((a, b) => a.t - b.t);
+    let lastAct = null;
+    for (let i = actRows.length - 1; i >= 0; i--) {
+      const r = actRows[i];
+      if (!Number.isFinite(r.v)) continue;
+      if (lastAct && r.v !== lastAct.v) break;
+      lastAct = { v: r.v, t: r.t };
+    }
+    if (lastAct && day0(lastAct.t) < day0(new Date())) lastAct.old = true;
+    // a value from today that only repeats yesterday's total is yesterday's (the counter has not restarted yet)
+    if (lastAct && !lastAct.old && !(todayK in daily) && daily[dayKey(y)] !== undefined && lastAct.v === daily[dayKey(y)]) lastAct.old = true;
+    if (minutes === null && lastAct && !lastAct.old) minutes = lastAct.v;
     const pct = minutes !== null && goal ? Math.round((minutes / goal) * 100) : null;
     const left = minutes !== null && goal ? Math.max(0, Math.round(goal - minutes)) : null;
 
@@ -307,7 +339,14 @@ class TractivePetCard extends HTMLElement {
     // without health data Tractive still creates the activity sensors, but they never get a value
     else if (!e.activity || (!usable(actS) && minutes === null && this._stats && !(this._stats[e.activity] || []).length && this._loadedAt))
       banner = this._banner(null, "mdi:heart-off-outline", s.noHealth, s.noHealthSub);
-    else if (!usable(actS)) banner = this._banner(null, "mdi:cloud-off-outline", s.activityOff, s.activityOffSub(minutes === null ? null : nf(minutes)));
+    else if (!usable(actS)) {
+      const ps = S(e.powerSaving), lk = lastAct ? ` ${s.lastKnown(nf(lastAct.v), when(lastAct.t))}` : "";
+      // the time the state changed, or null when the entity or its time is missing or not valid (the banner then omits "since")
+      const from = (x) => { const d = x?.last_changed ? new Date(x.last_changed) : null; return d && Number.isFinite(d.getTime()) ? when(d) : null; };
+      if (st && !usable(st)) banner = this._banner(null, "mdi:cloud-off-outline", s.activityCloud(from(st)), s.activityCloudSub + lk);
+      else if (ps?.state === "on") banner = this._banner(null, "mdi:power-sleep", s.activitySaving(from(ps)), s.activitySavingSub + lk);
+      else banner = this._banner(null, "mdi:timer-sand", s.activityOff(from(actS)), s.activityOffSub + lk);
+    }
     else if (pct !== null && pct >= 100) banner = this._banner(null, "mdi:party-popper", s.goalReached(p.name), `${s.goalReachedSub(nf(minutes), nf(goal), pct)} · ${whereText}`);
     else if (pct !== null) banner = this._banner(c.color, "mdi:walk", pct >= 75 ? s.almost(left) : pct >= 50 ? s.halfway(left) : s.needs(left),
       `${s.activitySub(nf(minutes), nf(goal), pct)} · ${pct < 50 ? s.walkHint + " · " : ""}${whereText}`);
@@ -328,7 +367,9 @@ class TractivePetCard extends HTMLElement {
         <div class="row"><ha-icon icon="${icon}"></ha-icon><span class="name">${esc(label)}</span></div><div class="value">${value}${unit ? `<small>${esc(unit)}</small>` : ""}</div></div>`;
     };
     const tiles = [
-      e.activity && tile(e.activity, s.activityToday, "mdi:run", nf(minutes), s.min, "green", pct !== null && pct >= 100),
+      e.activity && (minutes === null && lastAct
+        ? tile(e.activity, s.lastActivity, "mdi:run", `${nf(lastAct.v)}<small>${esc(s.min)}</small><span class="when">${esc(when(lastAct.t))}</span>`, "", "grey", false)
+        : tile(e.activity, s.activityToday, "mdi:run", nf(minutes), s.min, "green", pct !== null && pct >= 100)),
       e.goal && tile(e.goal, s.dailyGoal, "mdi:target", nf(goal), s.min, "blue", false),
       e.battery && tile(e.battery, s.battery, charging ? "mdi:battery-charging" : "mdi:battery", nf(bat), charging ? `% · ${s.charging}` : "%", bat !== null && bat < 20 ? "red" : "green", bat !== null && bat < 20 && !charging),
       e.status && tile(e.status, s.status, "mdi:satellite-variant", `<span class="word">${esc(stText)}</span>`, "", usable(st) && st.state !== "operational" ? "amber" : "blue", usable(st) && !["operational", "system_startup"].includes(st.state)),
@@ -453,6 +494,7 @@ const STYLE = `
   .tile .value { font-size: 1.3rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .tile .value small { font-size: .72rem; font-weight: 600; opacity: .8; margin-left: 3px; }
   .tile .value .word { font-size: .95rem; }
+  .tile .value .when { display: block; font-size: .72rem; font-weight: 600; opacity: .8; }
   .cols { display: grid; gap: 0 24px; }
   .block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--divider-color, rgba(127,127,127,.2)); }
   .group { font-size: .7rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--secondary-text-color); margin-bottom: 8px; }
